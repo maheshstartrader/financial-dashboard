@@ -3,6 +3,9 @@ import type { Transaction } from "@/types/finance";
 const SHEET_ID = import.meta.env.VITE_SHEET_ID as string;
 const SHEET_TAB = (import.meta.env.VITE_SHEET_TAB as string) || "Form Responses 1";
 
+console.log("[DEBUG] SHEET_ID =", SHEET_ID);
+console.log("[DEBUG] SHEET_TAB =", SHEET_TAB);
+
 /** Approximate fallback conversion rates if INRValue column is blank. */
 const FALLBACK_RATES: Record<string, number> = {
   INR: 1,
@@ -76,14 +79,17 @@ export async function fetchTransactions(): Promise<Transaction[]> {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(
     SHEET_TAB,
   )}`;
+  console.log("[DEBUG] URL =", url);
   const res = await fetch(url);
+  console.log("[DEBUG] HTTP STATUS =", res.status);
   if (!res.ok) throw new Error(`Failed to fetch sheet: ${res.status}`);
   const text = await res.text();
+  console.log("[DEBUG] RESPONSE PREVIEW =", text.slice(0, 200));
   // gviz wraps JSON in: /*O_o*/\ngoogle.visualization.Query.setResponse({...});
   const jsonMatch = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);?$/);
   const jsonStr = jsonMatch ? jsonMatch[1] : text;
   const data = JSON.parse(jsonStr) as GvizResponse;
-
+  console.log("[DEBUG] ROW COUNT =", data?.table?.rows?.length);
   return data.table.rows.map((row) => {
     const c = row.c;
     const timestamp = parseGvizDate(c[0]?.v);
