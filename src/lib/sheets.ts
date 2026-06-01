@@ -1,6 +1,6 @@
 import type { Transaction } from "@/types/finance";
 
-const SHEET_ID = import.meta.env.VITE_SHEET_ID as string;
+const SHEET_ID = (import.meta.env.VITE_SHEET_ID as string) || "1VNKC4jCH8G2vFycnNIopY3-XGKtCgH2TBa24CzYizKo";
 const SHEET_TAB = (import.meta.env.VITE_SHEET_TAB as string) || "Form Responses 1";
 
 console.log("[DEBUG] SHEET_ID =", SHEET_ID);
