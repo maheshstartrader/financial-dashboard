@@ -1,13 +1,15 @@
 import type { Transaction } from "@/types/finance";
 
-const SHEET_ID = import.meta.env.VITE_SHEET_ID as string;
-const SHEET_TAB =
-  (import.meta.env.VITE_SHEET_TAB as string) || "Form Responses 1";
+const SHEET_ID = "1VNKC4jCH8G2vFycnNIopY3-XGKtCgH2TBa24CzYizKo";
+const SHEET_TAB = "Form Responses 1";
 
+console.log("[INIT] sheets.ts loaded");
 console.log("[DEBUG] SHEET_ID =", SHEET_ID);
 console.log("[DEBUG] SHEET_TAB =", SHEET_TAB);
 
-/** Approximate fallback conversion rates if INRValue column is blank. */
+/* ================================
+   BASE FALLBACK RATES (SAFE)
+================================ */
 const FALLBACK_RATES: Record<string, number> = {
   INR: 1,
   USDT: 83,
@@ -16,66 +18,92 @@ const FALLBACK_RATES: Record<string, number> = {
 };
 
 /* ================================
-   LIVE RATES (ADDED - SAFE EXTENSION)
+   LIVE RATES STATE
 ================================ */
+let LIVE_RATES: Record<string, number> = { ...FALLBACK_RATES };
 
 const COINGECKO_API =
-  "https://api.coingecko.com/api/v3/simple/price?ids=tether,ethereum,bitcoin&vs_currencies=inr";
+  "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=inr";
 
-let ratesInitialized = false;
-let lastUpdatedAt = 0;
-const REFRESH_INTERVAL = 10 * 60 * 1000; // 10 min
+const REFRESH_INTERVAL = 60 * 1000; // 1 min (DEBUG MODE FAST)
 
-async function fetchLiveRatesFromAPI(): Promise<void> {
-  try {
-    const res = await fetch(COINGECKO_API);
-    if (!res.ok) return;
+let isInitialized = false;
+let lastSuccessTime = 0;
 
-    const data = await res.json();
-
-    // IMPORTANT: mutate existing object (do not replace it)
-    if (data?.tether?.inr) FALLBACK_RATES.USDT = data.tether.inr;
-    if (data?.ethereum?.inr) FALLBACK_RATES.ETH = data.ethereum.inr;
-    if (data?.bitcoin?.inr) FALLBACK_RATES.BTC = data.bitcoin.inr;
-
-    lastUpdatedAt = Date.now();
-
-    console.log("[LIVE RATES UPDATED]", FALLBACK_RATES);
-  } catch (err) {
-    console.warn("[LIVE RATES FETCH FAILED - USING FALLBACK]", err);
-  }
-}
-
-/**
- * Call this once in app startup (main.tsx or App.tsx)
- */
-export async function initLiveRates(): Promise<void> {
-  if (ratesInitialized) return;
-
-  ratesInitialized = true;
-
-  await fetchLiveRatesFromAPI();
-
-  setInterval(() => {
-    fetchLiveRatesFromAPI();
-  }, REFRESH_INTERVAL);
+/* ================================
+   GET RATE (IMPORTANT FIX)
+================================ */
+function getRate(currency: string): number {
+  const rate = LIVE_RATES[currency] ?? FALLBACK_RATES[currency] ?? 1;
+  console.log(`[RATE] ${currency} =`, rate);
+  return rate;
 }
 
 /* ================================
-   EXISTING LOGIC (UNCHANGED)
+   FETCH LIVE RATES
 ================================ */
+async function fetchLiveRates(): Promise<void> {
+  try {
+    console.log("[LIVE] Fetching crypto rates...");
 
-type Rates = Record<string, number>;
+    const res = await fetch(COINGECKO_API);
 
-let liveRates: Rates | null = null;
-let lastFetchTime = 0;
+    console.log("[LIVE] HTTP STATUS =", res.status);
 
-const COINGECKO_MAP: Record<string, string> = {
-  USDT: "tether",
-  BTC: "bitcoin",
-  ETH: "ethereum",
-};
+    if (!res.ok) {
+      console.warn("[LIVE] API FAILED - using fallback");
+      return;
+    }
 
+    const data = await res.json();
+
+    console.log("[LIVE] RAW RESPONSE =", data);
+
+    const newRates = {
+      USDT: data?.tether?.inr ?? LIVE_RATES.USDT,
+      ETH: data?.ethereum?.inr ?? LIVE_RATES.ETH,
+      BTC: data?.bitcoin?.inr ?? LIVE_RATES.BTC,
+    };
+
+    LIVE_RATES = {
+      ...LIVE_RATES,
+      ...newRates,
+    };
+
+    lastSuccessTime = Date.now();
+
+    console.log("[LIVE UPDATED SUCCESS]");
+    console.table(LIVE_RATES);
+  } catch (err) {
+    console.error("[LIVE ERROR]", err);
+  }
+}
+
+/* ================================
+   INIT FUNCTION (MUST CALL ON APP START)
+================================ */
+export async function initLiveRates(): Promise<void> {
+  if (isInitialized) {
+    console.log("[INIT] Already initialized");
+    return;
+  }
+
+  isInitialized = true;
+
+  console.log("[INIT] Starting live rates system...");
+
+  await fetchLiveRates();
+
+  setInterval(() => {
+    fetchLiveRates();
+  }, REFRESH_INTERVAL);
+
+  console.log("[INIT] Live rate interval set:", REFRESH_INTERVAL);
+}
+
+/* ================================
+   GOOGLE SHEETS FETCH
+================================ */
 interface GvizCell {
   v: unknown;
   f?: string;
@@ -85,27 +113,17 @@ interface GvizRow {
 }
 interface GvizResponse {
   table: {
-    cols: { id: string; label: string; type: string }[];
     rows: GvizRow[];
   };
 }
 
 function parseGvizDate(v: unknown): Date | null {
   if (!v) return null;
+
   if (typeof v === "string") {
-    const m = v.match(
-      /Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+),(\d+))?\)/,
-    );
+    const m = v.match(/Date\((\d+),(\d+),(\d+)/);
     if (m) {
-      const [, y, mo, d, h, mi, s] = m;
-      return new Date(
-        Number(y),
-        Number(mo),
-        Number(d),
-        Number(h ?? 0),
-        Number(mi ?? 0),
-        Number(s ?? 0),
-      );
+      return new Date(Number(m[1]), Number(m[2]), Number(m[3]));
     }
     const dt = new Date(v);
     return isNaN(dt.getTime()) ? null : dt;
@@ -114,108 +132,79 @@ function parseGvizDate(v: unknown): Date | null {
 }
 
 function cellString(cell: GvizCell | null): string {
-  if (!cell) return "";
-  if (cell.f) return cell.f;
-  return cell.v == null ? "" : String(cell.v);
+  return cell?.v == null ? "" : String(cell.v);
 }
 
 function cellNumber(cell: GvizCell | null): number {
   if (!cell) return 0;
   if (typeof cell.v === "number") return cell.v;
-  const n = parseFloat(String(cell.v ?? "").replace(/,/g, ""));
+  const n = parseFloat(String(cell.v).replace(/,/g, ""));
   return isNaN(n) ? 0 : n;
-}
-
-function monthLabel(d: Date | null): string {
-  if (!d) return "";
-  return (
-    d.toLocaleString("en-US", { month: "short" }) +
-    "-" +
-    d.getFullYear()
-  );
 }
 
 function weekOfYear(d: Date | null): number {
   if (!d) return 0;
   const onejan = new Date(d.getFullYear(), 0, 1);
-  return Math.ceil(
-    ((d.getTime() - onejan.getTime()) / 86400000 +
-      onejan.getDay() +
-      1) /
-      7,
-  );
+  return Math.ceil(((d.getTime() - onejan.getTime()) / 86400000 + onejan.getDay() + 1) / 7);
 }
 
+/* ================================
+   MAIN FETCH FUNCTION
+================================ */
 export async function fetchTransactions(): Promise<Transaction[]> {
-  if (!SHEET_ID) throw new Error("VITE_SHEET_ID is not configured");
+  console.log("[FETCH] Starting sheet fetch...");
 
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(
     SHEET_TAB,
   )}`;
 
-  console.log("[DEBUG] URL =", url);
-
   const res = await fetch(url);
-  console.log("[DEBUG] HTTP STATUS =", res.status);
 
-  if (!res.ok) throw new Error(`Failed to fetch sheet: ${res.status}`);
+  console.log("[FETCH] HTTP STATUS =", res.status);
+
+  if (!res.ok) {
+    throw new Error("Sheet fetch failed");
+  }
 
   const text = await res.text();
 
-  console.log("[DEBUG] RESPONSE PREVIEW =", text.slice(0, 200));
+  const jsonMatch = text.match(/google\.visualization\.Query\.setResponse\(([\s\S]+)\);?/);
+  const json = JSON.parse(jsonMatch ? jsonMatch[1] : text) as GvizResponse;
 
-  const jsonMatch = text.match(
-    /google\.visualization\.Query\.setResponse\(([\s\S]+)\);?$/,
-  );
+  console.log("[FETCH] ROWS =", json.table.rows.length);
 
-  const jsonStr = jsonMatch ? jsonMatch[1] : text;
-
-  const data = JSON.parse(jsonStr) as GvizResponse;
-
-  console.log("[DEBUG] ROW COUNT =", data?.table?.rows?.length);
-
-  return data.table.rows.map((row) => {
+  return json.table.rows.map((row, i) => {
     const c = row.c;
 
-    const timestamp = parseGvizDate(c[0]?.v);
-    const date = parseGvizDate(c[1]?.v) ?? timestamp;
-
-    const time = cellString(c[2]);
-    const eventType = cellString(c[3]);
-    const category = cellString(c[4]);
-    const platform = cellString(c[5]);
     const amount = cellNumber(c[6]);
     const currency = cellString(c[7]) || "INR";
-    const direction = cellString(c[8]);
-    const purpose = cellString(c[9]);
-    const proof = cellString(c[10]);
 
-    const monthCell = cellString(c[11]);
-    const yearCell = cellNumber(c[12]);
-    const weekCell = cellNumber(c[13]);
-    const inrCell = cellNumber(c[14]);
+    const rate = getRate(currency); // 🔥 LIVE DEBUG POINT
+    const inrValue = amount * rate;
 
-    const inrValue =
-      inrCell > 0
-        ? inrCell
-        : amount * (FALLBACK_RATES[currency] ?? 1);
-
-    return {
-      timestamp,
-      date,
-      time,
-      eventType,
-      category,
-      platform,
+    console.log(`[ROW ${i}]`, {
       amount,
       currency,
-      direction,
-      purpose,
-      proof,
+      rate,
       inrValue,
-      month: monthCell || monthLabel(date),
-      year: yearCell || (date ? date.getFullYear() : 0),
-      week: weekCell || weekOfYear(date),
+    });
+
+    const date = parseGvizDate(c[1]?.v);
+
+    return {
+      timestamp: parseGvizDate(c[0]?.v),
+      date,
+      time: cellString(c[2]),
+      eventType: cellString(c[3]),
+      category: cellString(c[4]),
+      platform: cellString(c[5]),
+      amount,
+      currency,
+      direction: cellString(c[8]),
+      purpose: cellString(c[9]),
+      proof: cellString(c[10]),
+      inrValue,
+      week: weekOfYear(date),
     } as Transaction;
   });
 }
